@@ -305,7 +305,8 @@ async function searchWithBrave(query: string): Promise<void> {
   }
 }
 
-function getBraveProfilePath(): string | null {
+// Find all valid Brave history database paths
+function getBraveProfilePaths(): string[] {
   // Add paths for different Brave versions (Stable, Beta, Nightly) if needed
   const potentialBasePaths = [
     join(homedir(), "Library/Application Support/BraveSoftware/Brave-Browser/"),
@@ -314,6 +315,7 @@ function getBraveProfilePath(): string | null {
   ];
 
   const profileNames = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"];
+  const foundPaths: string[] = []; // Store all found paths
 
   for (const basePath of potentialBasePaths) {
     for (const profileName of profileNames) {
@@ -322,7 +324,7 @@ function getBraveProfilePath(): string | null {
         try {
           if (statSync(historyPath).isFile()) {
             console.log("Found history DB at:", historyPath);
-            return historyPath; // Return the first one found
+            foundPaths.push(historyPath); // Add valid path
           }
         } catch (e) {
           // Ignore errors (e.g., permission denied initially)
@@ -331,8 +333,11 @@ function getBraveProfilePath(): string | null {
       }
     }
   }
-  console.warn("No Brave history database found in common locations.");
-  return null; // No history file found
+
+  if (foundPaths.length === 0) {
+    console.warn("No Brave history database found in common locations.");
+  }
+  return foundPaths; // Return array of all found paths
 }
 
 // Chrome/Brave epoch is microseconds since Jan 1, 1601 UTC
@@ -352,8 +357,8 @@ let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
 const wasmPath = join(environment.assetsPath, "sql-wasm.wasm");
 
 async function getHistory(days = 7): Promise<HistoryEntry[]> {
-  const historyDbPath = getBraveProfilePath();
-  if (!historyDbPath) {
+  const historyDbPaths = getBraveProfilePaths(); // Get all paths
+  if (historyDbPaths.length === 0) {
     return []; // No profile found
   }
 
@@ -362,35 +367,209 @@ async function getHistory(days = 7): Promise<HistoryEntry[]> {
   const daysAgoMs = nowMs - days * 24 * 60 * 60 * 1000;
   const thresholdChromeTime = daysAgoMs * 1000 + CHROME_EPOCH_OFFSET_MICROSECONDS;
 
-  // Check permissions before trying to read
-  try {
-    await fs.access(historyDbPath, fs.constants.R_OK); // Check read access
-  } catch (err: any) {
-    if (err.code === "EPERM" || err.code === "EACCES") {
-      console.error("Permission error accessing history DB:", err);
-      showToast({
-        style: Toast.Style.Failure,
-        title: "Permission Error",
-        message: "Raycast needs Full Disk Access to read Brave history. Please grant access in System Settings.",
-        // Consider adding an action to open settings
-      });
-    } else {
-      console.error("Error accessing history DB file:", err);
-      showToast({
-        style: Toast.Style.Failure,
-        title: "History File Error",
-        message: `Could not access ${historyDbPath}.`,
-      });
+  // Initialize sql.js once if needed
+  if (!SQL) {
+    console.log("Initializing sql.js...");
+    let wasmBinary: Buffer;
+    try {
+      wasmBinary = await fs.readFile(wasmPath);
+    } catch (readErr) {
+      console.error(`Failed to read WASM file at ${wasmPath}:`, readErr);
+      showToast({ style: Toast.Style.Failure, title: "sql.js Error", message: "Could not read sql-wasm.wasm file." });
+      return [];
     }
-    return []; // Cannot proceed without access
+    SQL = await initSqlJs({ wasmBinary });
+    console.log("sql.js initialized.");
   }
 
-  let db: Database | null = null;
+  const allHistoryEntries: HistoryEntry[] = [];
+  let permissionErrorShown = false; // Flag to show permission error only once
+
+  for (const historyDbPath of historyDbPaths) {
+    console.log(`Processing history file: ${historyDbPath}`);
+    let db: Database | null = null;
+    try {
+      // Check permissions for the current path
+      await fs.access(historyDbPath, fs.constants.R_OK);
+
+      // Read the current database file
+      console.log(`Reading history DB file: ${historyDbPath}`);
+      const fileBuffer = await fs.readFile(historyDbPath);
+      console.log(`Read ${fileBuffer.byteLength} bytes from ${historyDbPath}.`);
+
+      // Load the database
+      db = new SQL.Database(fileBuffer);
+      console.log(`Database ${historyDbPath} loaded into sql.js.`);
+
+      // Query explanation:
+      // - Select URL, title, and max visit time (most recent visit).
+      // - Join 'urls' and 'visits' tables.
+      // - Filter visits newer than the threshold.
+      // - Filter out non-http/https URLs.
+      // - Group by URL info to get the most recent visit per URL.
+      // - Order by the most recent visit time descending.
+      // - Limit results for performance.
+      const query = `
+         SELECT
+           u.id,
+           u.title,
+           u.url,
+           MAX(v.visit_time) as last_visit_time
+         FROM urls u
+         JOIN visits v ON u.id = v.url
+         WHERE v.visit_time >= ?
+           AND (u.url LIKE 'http://%' OR u.url LIKE 'https://%')
+         GROUP BY u.id, u.title, u.url
+         ORDER BY last_visit_time DESC
+         LIMIT 500;
+       `;
+
+      const results = db.exec(query, [thresholdChromeTime]);
+
+      if (!results || results.length === 0) {
+        console.log(`History query returned no results for ${historyDbPath}.`);
+        // Continue to the next profile
+      } else {
+        const columns = results[0].columns;
+        const rows = results[0].values;
+
+        const profileHistoryEntries: HistoryEntry[] = rows.map((row) => {
+          const url = row[columns.indexOf("url")] as string;
+          const visitTime = chromeTimeToUnixMs(row[columns.indexOf("last_visit_time")] as number);
+          const title = row[columns.indexOf("title")] as string | null;
+          return {
+            id: `${historyDbPath}-${url}-${visitTime}`, // Make ID unique across profiles
+            title: title || url,
+            url: url,
+            lastVisited: visitTime,
+          };
+        });
+        allHistoryEntries.push(...profileHistoryEntries);
+        console.log(`Added ${profileHistoryEntries.length} entries from ${historyDbPath}`);
+      }
+    } catch (error: any) {
+      // Handle errors for the specific profile path
+      if ((error.code === "EPERM" || error.code === "EACCES") && !permissionErrorShown) {
+        console.error(`Permission error accessing ${historyDbPath}:`, error);
+        showToast({
+          style: Toast.Style.Failure,
+          title: "Permission Error",
+          message: "Raycast needs Full Disk Access for Brave history. Check System Settings.",
+        });
+        permissionErrorShown = true; // Show only once
+      } else if (
+        error.message.includes("database disk image is malformed") ||
+        error.message.includes("file is not a database")
+      ) {
+        console.warn(`History DB error for ${historyDbPath}: ${error.message}`);
+        showToast({
+          style: Toast.Style.Warning, // Use Warning as it might affect only one profile
+          title: "History DB Error",
+          message: `Brave history file might be corrupted: ${historyDbPath.split("/").slice(-3).join("/")}`, // Show partial path
+        });
+      } else if (error.code === "ERR_FS_FILE_TOO_LARGE") {
+         console.warn(`History file too large for ${historyDbPath}: ${error.message}`);
+         showToast({
+           style: Toast.Style.Warning,
+           title: "History File Too Large",
+           message: `History file too large to load: ${historyDbPath.split("/").slice(-3).join("/")}`,
+         });
+      } else if (error.code !== "EPERM" && error.code !== "EACCES") { // Avoid redundant permission errors
+        console.error(`Error processing ${historyDbPath}:`, error);
+        showToast({
+          style: Toast.Style.Failure,
+          title: "Failed to read history",
+          message: `Error for profile ${historyDbPath.split("/").slice(-3).join("/")}: ${error.message}`,
+        });
+      }
+      // Continue to the next profile even if one fails
+    } finally {
+      // Close the database for the current profile
+      if (db) {
+        db.close();
+        console.log(`sql.js database for ${historyDbPath} closed.`);
+      }
+    }
+  } // End loop through paths
+
+  // Sort the combined list by visit time descending
+  allHistoryEntries.sort((a, b) => b.lastVisited - a.lastVisited);
+
+  // Deduplicate based on URL, keeping the most recent entry across all profiles
+  const uniqueHistoryEntries = Array.from(
+    new Map(allHistoryEntries.map((entry) => [entry.url, entry])).values()
+  );
+
+  console.log(`Returning ${uniqueHistoryEntries.length} unique history entries from ${historyDbPaths.length} profiles.`);
+  // Return the unique, sorted list
+  return uniqueHistoryEntries;
+}
+
+function isValidUrl(text: string): boolean {
+  if (!text || text.includes(" ")) return false; // Basic sanity check
+
+  // Try parsing with URL constructor
   try {
-    // Initialize sql.js if not already done
-    if (!SQL) {
-      console.log("Initializing sql.js...");
-      let wasmBinary: Buffer;
+    // Add protocol if missing for validation, but don't use this modified version for opening
+    const urlToTest = text.includes("://") ? text : `https://${text}`;
+    new URL(urlToTest);
+    return true;
+  } catch (_) {
+    // Allow scheme-less URLs like example.com, localhost, localhost:port
+    // Requires a dot OR is 'localhost' potentially followed by a port
+    return text.includes(".") || text.match(/^localhost(:\d+)?$/) !== null;
+  }
+}
+
+/**
+ * Fetches open tabs and/or browsing history from Brave.
+ * Shows appropriate toasts based on Brave's running state or errors.
+ */
+async function fetchBraveData(): Promise<{ tabs: Tab[]; history: HistoryEntry[]; isRunning: boolean }> {
+  const isRunning = await isBraveRunning();
+  console.log("Checking Brave status. Running:", isRunning);
+
+  let tabs: Tab[] = [];
+  let history: HistoryEntry[] = [];
+  const historyDays = isRunning ? 365 : 7; // Fetch more history if Brave is running
+
+  if (isRunning) {
+    console.log(`Brave is running. Fetching tabs and history (last ${historyDays} days)...`);
+    // Use Promise.allSettled to avoid one failing preventing the other
+    const results = await Promise.allSettled([getOpenTabs(), getHistory(historyDays)]);
+
+    if (results[0].status === "fulfilled") {
+      tabs = results[0].value;
+    } else {
+      console.error("Failed to get tabs:", results[0].reason);
+      // getOpenTabs shows its own toast on failure, except for "not running"
+    }
+    if (results[1].status === "fulfilled") {
+      history = results[1].value;
+    } else {
+      console.error("Failed to get history:", results[1].reason);
+      // getHistory shows its own toasts on failure (e.g., permissions)
+    }
+  } else {
+    console.log(`Brave is not running. Fetching history only (last ${historyDays} days)...`);
+    showToast({
+      style: Toast.Style.Info,
+      title: "Brave Browser Not Running",
+      message: "Showing history only. Start Brave to see open tabs.",
+    });
+    // Fetch history directly
+    try {
+      history = await getHistory(historyDays);
+    } catch (err) {
+      console.error("Failed to get history when Brave not running:", err);
+      // getHistory should handle showing toasts for specific errors
+    }
+    // tabs remains []
+  }
+
+  console.log(`Fetched ${tabs.length} tabs, ${history.length} history entries.`);
+  return { tabs, history, isRunning };
+}
       try {
         wasmBinary = await fs.readFile(wasmPath);
       } catch (readErr) {
