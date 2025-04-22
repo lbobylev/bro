@@ -1,4 +1,4 @@
-import { ActionPanel, Action, List, showToast, Toast, Icon, environment } from "@raycast/api";
+import { ActionPanel, Action, List, showToast, Toast, Icon, environment, closeMainWindow } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import React from "react";
 import { homedir } from "node:os";
@@ -618,7 +618,14 @@ function TabListItem({ tab, revalidate }: TabListItemProps) {
       keywords={[tab.url]}
       actions={
         <ActionPanel>
-          <Action title="Switch to Tab" icon={Icon.Eye} onAction={() => switchToTab(tab.windowId, tab.tabIndex)} />
+          <Action
+            title="Switch to Tab"
+            icon={Icon.Eye}
+            onAction={async () => { // Make the handler async
+              await switchToTab(tab.windowId, tab.tabIndex); // Wait for the action
+              await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
+            }}
+          />
           <Action.OpenInBrowser url={tab.url} />
           <Action.CopyToClipboard title="Copy URL" content={tab.url} />
           <ReloadDataAction onReload={revalidate} />
@@ -644,7 +651,14 @@ function HistoryListItem({ entry, revalidate }: HistoryListItemProps) {
       ]}
       actions={
         <ActionPanel>
-          <Action title="Open in New Tab" icon={Icon.Plus} onAction={() => openUrlInNewTab(entry.url)} />
+          <Action
+            title="Open in New Tab"
+            icon={Icon.Plus}
+            onAction={async () => { // Make the handler async
+              await openUrlInNewTab(entry.url); // Wait for the action
+              await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
+            }}
+          />
           <Action.OpenInBrowser url={entry.url} />
           <Action.CopyToClipboard title="Copy URL" content={entry.url} />
           <ReloadDataAction onReload={revalidate} />
@@ -672,13 +686,20 @@ function ActionListItem({
       icon={icon}
       actions={
         <ActionPanel>
-          <Action title={primaryActionTitle} icon={icon} onAction={primaryAction} />
+          <Action
+            title={primaryActionTitle}
+            icon={icon}
+            onAction={async () => { // Make the handler async
+              await primaryAction(); // Wait for the passed-in primary action function
+              await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
+            }}
+          />
           {secondaryAction && secondaryActionTitle && (
             // Determine icon based on secondary action title
             <Action
               title={secondaryActionTitle}
               icon={secondaryActionTitle.startsWith("Search") ? Icon.MagnifyingGlass : Icon.Link}
-              onAction={secondaryAction}
+              onAction={secondaryAction} // Secondary action doesn't close Raycast by default
             />
           )}
           <Action.CopyToClipboard title="Copy Input Text" content={textToCopy} />
