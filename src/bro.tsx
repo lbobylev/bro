@@ -574,6 +574,9 @@ async function fetchBraveData(): Promise<{ tabs: Tab[]; history: HistoryEntry[];
 // --- Component Props ---
 interface CommonItemProps {
   revalidate: () => void; // Function to reload data
+  // Add these:
+  trimmedSearchText: string;
+  looksLikeUrl: boolean;
 }
 
 interface TabListItemProps extends CommonItemProps {
@@ -608,7 +611,7 @@ function ReloadDataAction({ onReload }: { onReload: () => void }) {
 
 // --- List Item Components ---
 
-function TabListItem({ tab, revalidate }: TabListItemProps) {
+function TabListItem({ tab, revalidate, trimmedSearchText, looksLikeUrl }: TabListItemProps) {
   return (
     <List.Item
       key={tab.id}
@@ -626,6 +629,25 @@ function TabListItem({ tab, revalidate }: TabListItemProps) {
               await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
             }}
           />
+
+          {/* NEW: Cmd+Enter action for search text */}
+          {trimmedSearchText && (
+            <Action
+              title={looksLikeUrl ? `Open URL in Brave: ${trimmedSearchText}` : `Search in Brave: ${trimmedSearchText}`}
+              icon={looksLikeUrl ? Icon.Link : Icon.MagnifyingGlass}
+              onAction={async () => {
+                if (looksLikeUrl) {
+                  await openUrlInNewTab(trimmedSearchText);
+                } else {
+                  await searchWithBrave(trimmedSearchText);
+                }
+                await closeMainWindow({ clearRootSearch: true });
+              }}
+              shortcut={{ modifiers: ["cmd"], key: "enter" }}
+            />
+          )}
+
+          {/* Other existing actions */}
           <Action.OpenInBrowser url={tab.url} />
           <Action.CopyToClipboard title="Copy URL" content={tab.url} />
           <ReloadDataAction onReload={revalidate} />
@@ -635,7 +657,7 @@ function TabListItem({ tab, revalidate }: TabListItemProps) {
   );
 }
 
-function HistoryListItem({ entry, revalidate }: HistoryListItemProps) {
+function HistoryListItem({ entry, revalidate, trimmedSearchText, looksLikeUrl }: HistoryListItemProps) {
   return (
     <List.Item
       key={entry.id}
@@ -659,6 +681,25 @@ function HistoryListItem({ entry, revalidate }: HistoryListItemProps) {
               await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
             }}
           />
+
+          {/* NEW: Cmd+Enter action for search text */}
+          {trimmedSearchText && (
+            <Action
+              title={looksLikeUrl ? `Open URL in Brave: ${trimmedSearchText}` : `Search in Brave: ${trimmedSearchText}`}
+              icon={looksLikeUrl ? Icon.Link : Icon.MagnifyingGlass}
+              onAction={async () => {
+                if (looksLikeUrl) {
+                  await openUrlInNewTab(trimmedSearchText);
+                } else {
+                  await searchWithBrave(trimmedSearchText);
+                }
+                await closeMainWindow({ clearRootSearch: true });
+              }}
+              shortcut={{ modifiers: ["cmd"], key: "enter" }}
+            />
+          )}
+
+          {/* Other existing actions */}
           <Action.OpenInBrowser url={entry.url} />
           <Action.CopyToClipboard title="Copy URL" content={entry.url} />
           <ReloadDataAction onReload={revalidate} />
@@ -676,8 +717,10 @@ function ActionListItem({
   primaryActionTitle,
   secondaryAction,
   secondaryActionTitle,
-  textToCopy,
+  textToCopy, // This is the same as trimmedSearchText for these items
   revalidate,
+  trimmedSearchText, // Receive from props
+  looksLikeUrl,     // Receive from props
 }: ActionListItemProps) {
   return (
     <List.Item
@@ -686,22 +729,43 @@ function ActionListItem({
       icon={icon}
       actions={
         <ActionPanel>
+          {/* Existing primary action (Enter) */}
           <Action
             title={primaryActionTitle}
             icon={icon}
-            onAction={async () => { // Make the handler async
-              await primaryAction(); // Wait for the passed-in primary action function
-              await closeMainWindow({ clearRootSearch: true }); // Close Raycast and clear search
-            }}
+            onAction={primaryAction} // Use the passed async primaryAction
           />
+
+          {/* NEW: Cmd+Enter action for search text */}
+          {/* Note: This might duplicate the primary action's function, but provides the consistent Cmd+Enter shortcut */}
+          {trimmedSearchText && (
+             <Action
+               title={looksLikeUrl ? `Open URL in Brave: ${trimmedSearchText}` : `Search in Brave: ${trimmedSearchText}`}
+               icon={looksLikeUrl ? Icon.Link : Icon.MagnifyingGlass}
+               onAction={async () => {
+                 if (looksLikeUrl) {
+                   await openUrlInNewTab(trimmedSearchText);
+                 } else {
+                   await searchWithBrave(trimmedSearchText);
+                 }
+                 await closeMainWindow({ clearRootSearch: true });
+               }}
+               shortcut={{ modifiers: ["cmd"], key: "enter" }}
+             />
+          )}
+
+
+          {/* Existing secondary action */}
           {secondaryAction && secondaryActionTitle && (
-            // Determine icon based on secondary action title
             <Action
               title={secondaryActionTitle}
+              // Determine icon based on secondary action title (or pass icon prop?)
               icon={secondaryActionTitle.startsWith("Search") ? Icon.MagnifyingGlass : Icon.Link}
-              onAction={secondaryAction} // Secondary action doesn't close Raycast by default
+              onAction={secondaryAction} // Use the passed async secondaryAction
             />
           )}
+
+          {/* Other existing actions */}
           <Action.CopyToClipboard title="Copy Input Text" content={textToCopy} />
           <ReloadDataAction onReload={revalidate} />
         </ActionPanel>
@@ -809,11 +873,31 @@ export default function Command() {
           actions={
             <ActionPanel>
               {/* Show search action even if no results */}
+              {/* Show search action even if no results */}
               <Action
                 title={`Search with Brave: ${trimmedSearchText}`}
                 icon={Icon.MagnifyingGlass}
-                onAction={() => searchWithBrave(trimmedSearchText)}
+                onAction={async () => { // Make async
+                  await searchWithBrave(trimmedSearchText);
+                  await closeMainWindow({ clearRootSearch: true });
+                }}
               />
+              {/* NEW: Add Cmd+Enter action here too for consistency */}
+              {trimmedSearchText && (
+                 <Action
+                   title={looksLikeUrl ? `Open URL in Brave: ${trimmedSearchText}` : `Search in Brave: ${trimmedSearchText}`}
+                   icon={looksLikeUrl ? Icon.Link : Icon.MagnifyingGlass}
+                   onAction={async () => {
+                     if (looksLikeUrl) {
+                       await openUrlInNewTab(trimmedSearchText);
+                     } else {
+                       await searchWithBrave(trimmedSearchText);
+                     }
+                     await closeMainWindow({ clearRootSearch: true });
+                   }}
+                   shortcut={{ modifiers: ["cmd"], key: "enter" }}
+                 />
+              )}
               <ReloadDataAction onReload={revalidate} />
             </ActionPanel>
           }
@@ -824,7 +908,13 @@ export default function Command() {
       {isRunning && filteredTabs.length > 0 && (
         <List.Section title="Open Tabs" subtitle={filteredTabs.length.toString()}>
           {filteredTabs.map((tab) => (
-            <TabListItem key={tab.id} tab={tab} revalidate={revalidate} />
+            <TabListItem
+              key={tab.id}
+              tab={tab}
+              revalidate={revalidate}
+              trimmedSearchText={trimmedSearchText} // Pass down
+              looksLikeUrl={looksLikeUrl}         // Pass down
+            />
           ))}
         </List.Section>
       )}
@@ -833,7 +923,13 @@ export default function Command() {
       {filteredHistory.length > 0 && (
         <List.Section title="Browsing History" subtitle={filteredHistory.length.toString()}>
           {filteredHistory.map((entry) => (
-            <HistoryListItem key={entry.id} entry={entry} revalidate={revalidate} />
+            <HistoryListItem
+              key={entry.id}
+              entry={entry}
+              revalidate={revalidate}
+              trimmedSearchText={trimmedSearchText} // Pass down
+              looksLikeUrl={looksLikeUrl}         // Pass down
+            />
           ))}
         </List.Section>
       )}
@@ -845,24 +941,41 @@ export default function Command() {
             <ActionListItem
               title={`Open URL: ${trimmedSearchText}`}
               icon={Icon.Link}
-              primaryAction={() => openUrlInNewTab(trimmedSearchText)}
+              primaryAction={async () => { // Ensure primaryAction is async
+                await openUrlInNewTab(trimmedSearchText);
+                await closeMainWindow({ clearRootSearch: true });
+              }}
               primaryActionTitle="Open URL in New Tab"
-              secondaryAction={() => searchWithBrave(trimmedSearchText)} // Offer search as secondary
+              secondaryAction={async () => { // Ensure secondaryAction is async
+                await searchWithBrave(trimmedSearchText);
+                // Decide if secondary action should close window, maybe not?
+                // await closeMainWindow({ clearRootSearch: true });
+              }}
               secondaryActionTitle="Search with Brave"
               textToCopy={trimmedSearchText}
               revalidate={revalidate}
+              trimmedSearchText={trimmedSearchText} // Pass down
+              looksLikeUrl={looksLikeUrl}         // Pass down
             />
           )}
           <ActionListItem
             title={`Search with Brave: ${trimmedSearchText}`}
             icon={Icon.MagnifyingGlass}
-            primaryAction={() => searchWithBrave(trimmedSearchText)}
+            primaryAction={async () => { // Ensure primaryAction is async
+              await searchWithBrave(trimmedSearchText);
+              await closeMainWindow({ clearRootSearch: true });
+            }}
             primaryActionTitle="Search with Brave"
-            // Only add secondary "Open URL" if it wasn't the primary action above
-            secondaryAction={looksLikeUrl ? () => openUrlInNewTab(trimmedSearchText) : undefined}
+            secondaryAction={looksLikeUrl ? async () => { // Ensure secondaryAction is async
+              await openUrlInNewTab(trimmedSearchText);
+              // Decide if secondary action should close window, maybe not?
+              // await closeMainWindow({ clearRootSearch: true });
+            } : undefined}
             secondaryActionTitle={looksLikeUrl ? "Open URL in New Tab" : undefined}
             textToCopy={trimmedSearchText}
             revalidate={revalidate}
+            trimmedSearchText={trimmedSearchText} // Pass down
+            looksLikeUrl={looksLikeUrl}         // Pass down
           />
         </List.Section>
       )}
