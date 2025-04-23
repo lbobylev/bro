@@ -643,7 +643,7 @@ function TabListItem({ tab, revalidate, trimmedSearchText, looksLikeUrl }: TabLi
                 }
                 await closeMainWindow({ clearRootSearch: true });
               }}
-              shortcut={{ modifiers: ["cmd"], key: "enter" }}
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
             />
           )}
 
@@ -695,7 +695,7 @@ function HistoryListItem({ entry, revalidate, trimmedSearchText, looksLikeUrl }:
                 }
                 await closeMainWindow({ clearRootSearch: true });
               }}
-              shortcut={{ modifiers: ["cmd"], key: "enter" }}
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
             />
           )}
 
@@ -750,7 +750,7 @@ function ActionListItem({
                  }
                  await closeMainWindow({ clearRootSearch: true });
                }}
-               shortcut={{ modifiers: ["cmd"], key: "enter" }}
+               shortcut={{ modifiers: ["opt"], key: "enter" }}
              />
           )}
 
@@ -895,7 +895,7 @@ export default function Command() {
                      }
                      await closeMainWindow({ clearRootSearch: true });
                    }}
-                   shortcut={{ modifiers: ["cmd"], key: "enter" }}
+                   shortcut={{ modifiers: ["opt"], key: "enter" }}
                  />
               )}
               <ReloadDataAction onReload={revalidate} />
